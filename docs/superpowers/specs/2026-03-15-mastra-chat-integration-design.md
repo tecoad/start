@@ -68,7 +68,7 @@ const RESOURCE_ID = 'weather-chat'
 - Returns `createUIMessageStreamResponse({ stream })`
 
 **GET handler:**
-- Gets weather agent's memory via `mastra.getAgentById('weather-agent').getMemory()`
+- Gets weather agent's memory via `await mastra.getAgentById('weather-agent').getMemory()`
 - Recalls messages with `memory.recall({ threadId: THREAD_ID, resourceId: RESOURCE_ID })` (note: the `Memory.recall` API uses `threadId` and `resourceId` field names -- different from the execution API above)
 - Wraps in try/catch, returns empty array if no history exists
 - Converts to UI format via `toAISdkV5Messages(response?.messages || [])`
