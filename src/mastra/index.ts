@@ -13,7 +13,7 @@ export const mastra = new Mastra({
   storage: new LibSQLStore({
     id: "mastra-storage",
     // stores observability, scores, ... into persistent file storage
-    url: "file:./mastra.db",
+    url: `file:${process.cwd()}/mastra.db`,
   }),
   logger: new PinoLogger({
     name: 'Mastra',
