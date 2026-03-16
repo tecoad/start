@@ -6,22 +6,24 @@ Replicate the [Next.js Mastra chat guide](https://mastra.ai/guides/getting-start
 
 ## Context
 
-The project is a TanStack Start app with Mastra already initialized (`src/mastra/` with weather agent, tools, workflows, and LibSQL storage). The Next.js guide uses App Router API routes (`app/api/chat/route.ts`) and AI SDK React hooks. TanStack Start uses file-based routing with `createFileRoute` and supports API routes via `server.handlers`.
+The project is a TanStack Start app (`@tanstack/react-start@1.166.x`) with Mastra already initialized (`src/mastra/` with weather agent, tools, workflows, and LibSQL storage). The Next.js guide uses App Router API routes (`app/api/chat/route.ts`) and AI SDK React hooks.
+
+TanStack Start does not have a `createAPIFileRoute` function. Instead, it supports server-side HTTP handlers via `createFileRoute` with `server.handlers`, where each handler method (`GET`, `POST`, etc.) receives a context object with `request`, `params`, and `pathname`, and returns a standard `Response` object.
 
 ## Approach
 
-**TanStack Start API Routes** -- the most direct translation of the Next.js pattern. TanStack Start's `createAPIFileRoute` provides `GET`/`POST` handlers that return standard `Response` objects, which is exactly what `@ai-sdk/react`'s `useChat` hook expects.
+**TanStack Start `server.handlers`** -- the most direct translation of the Next.js pattern. The `server.handlers` option on `createFileRoute` provides `GET`/`POST` handlers that return standard `Response` objects, which is exactly what `@ai-sdk/react`'s `useChat` hook expects.
 
 ## Architecture
 
 ### Translation Map
 
-| Next.js                        | TanStack Start                                       |
-| ------------------------------ | ---------------------------------------------------- |
-| `app/api/chat/route.ts`        | `src/routes/api/chat.ts` (API route, `server.handlers`) |
-| `app/chat/page.tsx`            | `src/routes/chat.tsx` (file route with component)    |
-| `@/mastra` path alias          | `#/mastra` (configured via `imports` in package.json) |
-| `ai-elements` components       | Inline Tailwind components (no external dependency)  |
+| Next.js                        | TanStack Start                                                             |
+| ------------------------------ | -------------------------------------------------------------------------- |
+| `app/api/chat/route.ts`        | `src/routes/api/chat.ts` (`createFileRoute('/api/chat')` + `server.handlers`) |
+| `app/chat/page.tsx`            | `src/routes/chat.tsx` (`createFileRoute('/chat')` + `component`)           |
+| `@/mastra` path alias          | `#/mastra` (configured via `imports` in package.json)                      |
+| `ai-elements` components       | Inline Tailwind components (no external dependency)                        |
 
 ### File Changes
 
@@ -40,28 +42,56 @@ package.json                  <- MODIFY: concurrently dev scripts
 
 ### 1. API Route (`src/routes/api/chat.ts`)
 
-TanStack Start API route using `createAPIFileRoute('/api/chat')` with no component export.
+Uses `createFileRoute('/api/chat')` with `server.handlers` (no `component` export). Each handler receives `ctx: { request, params, pathname }` and returns a `Response`.
+
+**Imports:**
+
+```ts
+import { createFileRoute } from '@tanstack/react-router'
+import { handleChatStream } from '@mastra/ai-sdk'
+import { toAISdkV5Messages } from '@mastra/ai-sdk/ui'
+import { createUIMessageStreamResponse } from 'ai'
+import { mastra } from '#/mastra'
+```
+
+**Constants:**
+
+```ts
+const THREAD_ID = 'example-user-id'
+const RESOURCE_ID = 'weather-chat'
+```
 
 **POST handler:**
-- Parses request body via `request.json()`
-- Injects hardcoded `thread` (`'example-user-id'`) and `resource` (`'weather-chat'`) IDs into memory params
-- Calls `handleChatStream` from `@mastra/ai-sdk` with `mastra` instance and `agentId: 'weather-agent'`
-- Returns `createUIMessageStreamResponse({ stream })` from the `ai` package
+- Parses request body via `ctx.request.json()`
+- Injects `memory: { thread: THREAD_ID, resource: RESOURCE_ID }` into params (note: the `AgentExecutionOptions.memory` API uses `thread` and `resource` field names)
+- Calls `handleChatStream({ mastra, agentId: 'weather-agent', params })` which returns a `ReadableStream`
+- Returns `createUIMessageStreamResponse({ stream })`
 
 **GET handler:**
 - Gets weather agent's memory via `mastra.getAgentById('weather-agent').getMemory()`
-- Recalls messages with `memory.recall({ threadId: 'example-user-id', resourceId: 'weather-chat' })`
-- Converts to UI format via `toAISdkV5Messages` from `@mastra/ai-sdk/ui`
-- Returns `new Response(JSON.stringify(uiMessages))` with `application/json` content type
+- Recalls messages with `memory.recall({ threadId: THREAD_ID, resourceId: RESOURCE_ID })` (note: the `Memory.recall` API uses `threadId` and `resourceId` field names -- different from the execution API above)
+- Wraps in try/catch, returns empty array if no history exists
+- Converts to UI format via `toAISdkV5Messages(response?.messages || [])`
+- Returns `new Response(JSON.stringify(uiMessages), { headers: { 'Content-Type': 'application/json' } })`
 
 ### 2. Chat Page (`src/routes/chat.tsx`)
 
-Client-side component using `createFileRoute('/chat')`.
+Uses `createFileRoute('/chat')` with a `component` export.
+
+**Imports:**
+
+```ts
+import { createFileRoute } from '@tanstack/react-router'
+import { useChat } from '@ai-sdk/react'
+import { DefaultChatTransport } from 'ai'
+```
 
 **State and hooks:**
-- `useChat` from `@ai-sdk/react` with `DefaultChatTransport({ api: '/api/chat' })`
-- Local `input` state for the textarea
-- `useEffect` on mount to fetch history via GET `/api/chat` and hydrate with `setMessages`
+- `useChat` from `@ai-sdk/react` configured with `transport: new DefaultChatTransport({ api: '/api/chat' })`
+- Returns `{ messages, setMessages, sendMessage, status }` (AI SDK v5 API -- no `handleSubmit` or `input` binding)
+- Local `input` state managed via `useState` for the textarea
+- Submit calls `sendMessage({ text: input })` then clears the input
+- `useEffect` on mount fetches GET `/api/chat` and hydrates history with `setMessages`
 
 **Rendering:**
 - Message list iterating `messages`, rendering each `part`:
@@ -90,7 +120,7 @@ Install `concurrently` as devDependency. Update scripts:
 
 ```json
 {
-  "dev": "concurrently -n app,mastra -c blue,magenta \"vite dev --port 3000\" \"mastra dev\"",
+  "dev": "concurrently -n app,mastra -c blue,magenta \"bun run dev:app\" \"bun run dev:mastra\"",
   "dev:app": "vite dev --port 3000",
   "dev:mastra": "mastra dev"
 }
@@ -113,7 +143,7 @@ Install `concurrently` as devDependency. Update scripts:
 User types message
     → useChat sends POST /api/chat
         → handleChatStream(mastra, 'weather-agent', params)
-            → Agent processes with memory (thread + resource IDs)
+            → Agent processes with memory (thread: THREAD_ID, resource: RESOURCE_ID)
             → Agent may invoke weatherTool (geocoding + weather API)
         → createUIMessageStreamResponse streams back SSE chunks
     → useChat updates messages state
@@ -121,7 +151,7 @@ User types message
 
 Page reload
     → useEffect fetches GET /api/chat
-        → memory.recall(threadId, resourceId)
+        → memory.recall({ threadId: THREAD_ID, resourceId: RESOURCE_ID })
         → toAISdkV5Messages converts to UI format
     → setMessages hydrates chat history
 ```
